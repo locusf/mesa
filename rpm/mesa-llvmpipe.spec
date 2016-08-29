@@ -209,7 +209,7 @@ Mesa libGL development packages
 %build
 %autogen --disable-static \
     --enable-dri \
-    --with-dri-drivers=i915,i965 \
+    --with-dri-drivers= \
     --enable-osmesa=no \
     --with-egl-platforms=fbdev,wayland \
     --disable-glx \
@@ -219,7 +219,7 @@ Mesa libGL development packages
     --enable-gles2=yes \
     --disable-gallium-llvm \
     --disable-gallium-radeon \
-    --with-gallium-drivers=""
+    --with-gallium-drivers=vc4
 
 make %{?jobs:-j%jobs}
 
