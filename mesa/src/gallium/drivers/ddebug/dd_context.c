@@ -230,7 +230,8 @@ DD_CSO_CREATE(sampler, sampler)
 DD_CSO_DELETE(sampler)
 
 static void
-dd_context_bind_sampler_states(struct pipe_context *_pipe, unsigned shader,
+dd_context_bind_sampler_states(struct pipe_context *_pipe,
+                               enum pipe_shader_type shader,
                                unsigned start, unsigned count, void **states)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -506,7 +507,8 @@ dd_context_stream_output_target_destroy(struct pipe_context *_pipe,
  */
 
 static void
-dd_context_set_sampler_views(struct pipe_context *_pipe, unsigned shader,
+dd_context_set_sampler_views(struct pipe_context *_pipe,
+                             enum pipe_shader_type shader,
                              unsigned start, unsigned num,
                              struct pipe_sampler_view **views)
 {
@@ -519,7 +521,8 @@ dd_context_set_sampler_views(struct pipe_context *_pipe, unsigned shader,
 }
 
 static void
-dd_context_set_shader_images(struct pipe_context *_pipe, unsigned shader,
+dd_context_set_shader_images(struct pipe_context *_pipe,
+                             enum pipe_shader_type shader,
                              unsigned start, unsigned num,
                              const struct pipe_image_view *views)
 {

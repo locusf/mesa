@@ -1045,6 +1045,18 @@ builtin_variable_generator::generate_tcs_special_vars()
               "gl_TessLevelOuter")->data.patch = 1;
    add_output(VARYING_SLOT_TESS_LEVEL_INNER, array(float_t, 2),
               "gl_TessLevelInner")->data.patch = 1;
+   /* XXX What to do if multiple are flipped on? */
+   int bbox_slot = state->ctx->Const.NoPrimitiveBoundingBoxOutput ? -1 :
+      VARYING_SLOT_BOUNDING_BOX0;
+   if (state->EXT_primitive_bounding_box_enable)
+      add_output(bbox_slot, array(vec4_t, 2), "gl_BoundingBoxEXT")
+         ->data.patch = 1;
+   if (state->OES_primitive_bounding_box_enable)
+      add_output(bbox_slot, array(vec4_t, 2), "gl_BoundingBoxOES")
+         ->data.patch = 1;
+   if (state->is_version(0, 320) || state->ARB_ES3_2_compatibility_enable)
+      add_output(bbox_slot, array(vec4_t, 2), "gl_BoundingBox")
+         ->data.patch = 1;
 }
 
 
@@ -1147,13 +1159,8 @@ builtin_variable_generator::generate_fs_special_vars()
    }
 
    if (state->es_shader && state->language_version == 100 && state->EXT_blend_func_extended_enable) {
-      /* We make an assumption here that there will only ever be one dual-source draw buffer
-       * In case this assumption is ever proven to be false, make sure to assert here
-       * since we don't handle this case.
-       * In practice, this issue will never arise since no hardware will support it.
-       */
-      assert(state->Const.MaxDualSourceDrawBuffers <= 1);
-      add_index_output(FRAG_RESULT_DATA0, 1, vec4_t, "gl_SecondaryFragColorEXT");
+      add_index_output(FRAG_RESULT_COLOR, 1, vec4_t,
+                       "gl_SecondaryFragColorEXT");
       add_index_output(FRAG_RESULT_DATA0, 1,
                        array(vec4_t, state->Const.MaxDualSourceDrawBuffers),
                        "gl_SecondaryFragDataEXT");

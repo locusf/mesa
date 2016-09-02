@@ -124,13 +124,15 @@ static struct pipe_surface *noop_create_surface(struct pipe_context *ctx,
    return surface;
 }
 
-static void noop_set_sampler_views(struct pipe_context *ctx, unsigned shader,
+static void noop_set_sampler_views(struct pipe_context *ctx,
+                                   enum pipe_shader_type shader,
                                    unsigned start, unsigned count,
                                    struct pipe_sampler_view **views)
 {
 }
 
-static void noop_bind_sampler_states(struct pipe_context *ctx, unsigned shader,
+static void noop_bind_sampler_states(struct pipe_context *ctx,
+                                     enum pipe_shader_type shader,
                                      unsigned start, unsigned count,
                                      void **states)
 {

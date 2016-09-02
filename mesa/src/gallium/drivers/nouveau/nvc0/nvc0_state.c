@@ -426,7 +426,8 @@ nvc0_sampler_state_delete(struct pipe_context *pipe, void *hwcso)
 }
 
 static inline void
-nvc0_stage_sampler_states_bind(struct nvc0_context *nvc0, int s,
+nvc0_stage_sampler_states_bind(struct nvc0_context *nvc0,
+                               unsigned s,
                                unsigned nr, void **hwcso)
 {
    unsigned i;
@@ -456,7 +457,7 @@ nvc0_stage_sampler_states_bind(struct nvc0_context *nvc0, int s,
 
 static void
 nvc0_stage_sampler_states_bind_range(struct nvc0_context *nvc0,
-                                     const unsigned s,
+                                     unsigned s,
                                      unsigned start, unsigned nr, void **cso)
 {
    const unsigned end = start + nr;
@@ -497,7 +498,8 @@ nvc0_stage_sampler_states_bind_range(struct nvc0_context *nvc0,
 }
 
 static void
-nvc0_bind_sampler_states(struct pipe_context *pipe, unsigned shader,
+nvc0_bind_sampler_states(struct pipe_context *pipe,
+                         enum pipe_shader_type shader,
                          unsigned start, unsigned nr, void **s)
 {
    switch (shader) {
@@ -525,6 +527,9 @@ nvc0_bind_sampler_states(struct pipe_context *pipe, unsigned shader,
       nvc0_stage_sampler_states_bind_range(nvc0_context(pipe), 5,
                                            start, nr, s);
       nvc0_context(pipe)->dirty_cp |= NVC0_NEW_CP_SAMPLERS;
+      break;
+   default:
+      assert(!"unexpected shader type");
       break;
    }
 }
@@ -651,7 +656,7 @@ nvc0_stage_set_sampler_views_range(struct nvc0_context *nvc0, const unsigned s,
 }
 
 static void
-nvc0_set_sampler_views(struct pipe_context *pipe, unsigned shader,
+nvc0_set_sampler_views(struct pipe_context *pipe, enum pipe_shader_type shader,
                        unsigned start, unsigned nr,
                        struct pipe_sampler_view **views)
 {
@@ -1339,7 +1344,8 @@ nvc0_bind_images_range(struct nvc0_context *nvc0, const unsigned s,
 }
 
 static void
-nvc0_set_shader_images(struct pipe_context *pipe, unsigned shader,
+nvc0_set_shader_images(struct pipe_context *pipe,
+                       enum pipe_shader_type shader,
                        unsigned start, unsigned nr,
                        const struct pipe_image_view *images)
 {
@@ -1404,7 +1410,7 @@ nvc0_bind_buffers_range(struct nvc0_context *nvc0, const unsigned t,
 
 static void
 nvc0_set_shader_buffers(struct pipe_context *pipe,
-                        unsigned shader,
+                        enum pipe_shader_type shader,
                         unsigned start, unsigned nr,
                         const struct pipe_shader_buffer *buffers)
 {

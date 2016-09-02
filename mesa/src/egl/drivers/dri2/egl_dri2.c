@@ -593,13 +593,13 @@ dri2_setup_screen(_EGLDisplay *disp)
    }
 
    disp->ClientAPIs = 0;
-   if (api_mask & (1 <<__DRI_API_OPENGL))
+   if ((api_mask & (1 <<__DRI_API_OPENGL)) && _eglIsApiValid(EGL_OPENGL_API))
       disp->ClientAPIs |= EGL_OPENGL_BIT;
-   if (api_mask & (1 <<__DRI_API_GLES))
+   if ((api_mask & (1 << __DRI_API_GLES)) && _eglIsApiValid(EGL_OPENGL_ES_API))
       disp->ClientAPIs |= EGL_OPENGL_ES_BIT;
-   if (api_mask & (1 << __DRI_API_GLES2))
+   if ((api_mask & (1 << __DRI_API_GLES2)) && _eglIsApiValid(EGL_OPENGL_ES_API))
       disp->ClientAPIs |= EGL_OPENGL_ES2_BIT;
-   if (api_mask & (1 << __DRI_API_GLES3))
+   if ((api_mask & (1 << __DRI_API_GLES3)) && _eglIsApiValid(EGL_OPENGL_ES_API))
       disp->ClientAPIs |= EGL_OPENGL_ES3_BIT_KHR;
 
    assert(dri2_dpy->image_driver || dri2_dpy->dri2 || dri2_dpy->swrast);
@@ -858,8 +858,11 @@ dri2_display_release(_EGLDisplay *disp) {
       close(dri2_dpy->fd);
    if (dri2_dpy->driver)
       dlclose(dri2_dpy->driver);
-   free(dri2_dpy->device_name);
    free(dri2_dpy->driver_name);
+
+#ifdef HAVE_WAYLAND_PLATFORM
+   free(dri2_dpy->device_name);
+#endif
 
    switch (disp->Platform) {
 #ifdef HAVE_X11_PLATFORM

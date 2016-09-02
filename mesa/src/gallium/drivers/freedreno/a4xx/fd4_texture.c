@@ -144,7 +144,7 @@ fd4_sampler_state_create(struct pipe_context *pctx,
 
 static void
 fd4_sampler_states_bind(struct pipe_context *pctx,
-		unsigned shader, unsigned start,
+		enum pipe_shader_type shader, unsigned start,
 		unsigned nr, void **hwcso)
 {
 	struct fd_context *ctx = fd_context(pctx);
@@ -308,7 +308,7 @@ fd4_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 }
 
 static void
-fd4_set_sampler_views(struct pipe_context *pctx, unsigned shader,
+fd4_set_sampler_views(struct pipe_context *pctx, enum pipe_shader_type shader,
 		unsigned start, unsigned nr,
 		struct pipe_sampler_view **views)
 {

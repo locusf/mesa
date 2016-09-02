@@ -284,7 +284,8 @@ rbug_create_sampler_state(struct pipe_context *_pipe,
 }
 
 static void
-rbug_bind_sampler_states(struct pipe_context *_pipe, unsigned shader,
+rbug_bind_sampler_states(struct pipe_context *_pipe,
+                         enum pipe_shader_type shader,
                          unsigned start, unsigned count,
                          void **samplers)
 {
@@ -726,7 +727,7 @@ rbug_set_viewport_states(struct pipe_context *_pipe,
 
 static void
 rbug_set_sampler_views(struct pipe_context *_pipe,
-                       unsigned shader,
+                       enum pipe_shader_type shader,
                        unsigned start,
                        unsigned num,
                        struct pipe_sampler_view **_views)

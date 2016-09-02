@@ -377,7 +377,7 @@ trace_context_create_sampler_state(struct pipe_context *_pipe,
 
 static void
 trace_context_bind_sampler_states(struct pipe_context *_pipe,
-                                  unsigned shader,
+                                  enum pipe_shader_type shader,
                                   unsigned start,
                                   unsigned num_states,
                                   void **states)
@@ -1016,7 +1016,7 @@ trace_context_surface_destroy(struct pipe_context *_pipe,
 
 static void
 trace_context_set_sampler_views(struct pipe_context *_pipe,
-                                unsigned shader,
+                                enum pipe_shader_type shader,
                                 unsigned start,
                                 unsigned num,
                                 struct pipe_sampler_view **views)
@@ -1711,7 +1711,7 @@ trace_context_set_tess_state(struct pipe_context *_context,
 
 
 static void trace_context_set_shader_buffers(struct pipe_context *_context,
-                                             unsigned shader,
+                                             enum pipe_shader_type shader,
                                              unsigned start, unsigned nr,
                                              const struct pipe_shader_buffer *buffers)
 {
@@ -1749,7 +1749,7 @@ static void trace_context_set_shader_buffers(struct pipe_context *_context,
 }
 
 static void trace_context_set_shader_images(struct pipe_context *_context,
-                                            unsigned shader,
+                                            enum pipe_shader_type shader,
                                             unsigned start, unsigned nr,
                                             const struct pipe_image_view *images)
 {

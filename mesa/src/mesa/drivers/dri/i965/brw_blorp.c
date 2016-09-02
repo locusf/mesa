@@ -30,12 +30,80 @@
 
 #include "brw_blorp.h"
 #include "brw_context.h"
+#include "brw_defines.h"
 #include "brw_meta_util.h"
 #include "brw_state.h"
 #include "intel_fbo.h"
 #include "intel_debug.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BLORP
+
+static bool
+brw_blorp_lookup_shader(struct blorp_context *blorp,
+                        const void *key, uint32_t key_size,
+                        uint32_t *kernel_out, void *prog_data_out)
+{
+   struct brw_context *brw = blorp->driver_ctx;
+   return brw_search_cache(&brw->cache, BRW_CACHE_BLORP_PROG,
+                           key, key_size, kernel_out, prog_data_out);
+}
+
+static void
+brw_blorp_upload_shader(struct blorp_context *blorp,
+                        const void *key, uint32_t key_size,
+                        const void *kernel, uint32_t kernel_size,
+                        const void *prog_data, uint32_t prog_data_size,
+                        uint32_t *kernel_out, void *prog_data_out)
+{
+   struct brw_context *brw = blorp->driver_ctx;
+   brw_upload_cache(&brw->cache, BRW_CACHE_BLORP_PROG, key, key_size,
+                    kernel, kernel_size, prog_data, prog_data_size,
+                    kernel_out, prog_data_out);
+}
+
+void
+brw_blorp_init(struct brw_context *brw)
+{
+   blorp_init(&brw->blorp, brw, &brw->isl_dev);
+
+   brw->blorp.compiler = brw->intelScreen->compiler;
+
+   switch (brw->gen) {
+   case 6:
+      brw->blorp.mocs.tex = 0;
+      brw->blorp.mocs.rb = 0;
+      brw->blorp.mocs.vb = 0;
+      brw->blorp.exec = gen6_blorp_exec;
+      break;
+   case 7:
+      brw->blorp.mocs.tex = GEN7_MOCS_L3;
+      brw->blorp.mocs.rb = GEN7_MOCS_L3;
+      brw->blorp.mocs.vb = GEN7_MOCS_L3;
+      if (brw->is_haswell) {
+         brw->blorp.exec = gen75_blorp_exec;
+      } else {
+         brw->blorp.exec = gen7_blorp_exec;
+      }
+      break;
+   case 8:
+      brw->blorp.mocs.tex = BDW_MOCS_WB;
+      brw->blorp.mocs.rb = BDW_MOCS_PTE;
+      brw->blorp.mocs.vb = BDW_MOCS_WB;
+      brw->blorp.exec = gen8_blorp_exec;
+      break;
+   case 9:
+      brw->blorp.mocs.tex = SKL_MOCS_WB;
+      brw->blorp.mocs.rb = SKL_MOCS_PTE;
+      brw->blorp.mocs.vb = SKL_MOCS_WB;
+      brw->blorp.exec = gen9_blorp_exec;
+      break;
+   default:
+      unreachable("Invalid gen");
+   }
+
+   brw->blorp.lookup_shader = brw_blorp_lookup_shader;
+   brw->blorp.upload_shader = brw_blorp_upload_shader;
+}
 
 static void
 apply_gen6_stencil_hiz_offset(struct isl_surf *surf,
@@ -69,17 +137,22 @@ apply_gen6_stencil_hiz_offset(struct isl_surf *surf,
 }
 
 static void
-brw_blorp_surf_for_miptree(struct brw_context *brw,
-                           struct brw_blorp_surf *surf,
-                           struct intel_mipmap_tree *mt,
-                           bool is_render_target,
-                           unsigned *level,
-                           struct isl_surf tmp_surfs[2])
+blorp_surf_for_miptree(struct brw_context *brw,
+                       struct blorp_surf *surf,
+                       struct intel_mipmap_tree *mt,
+                       bool is_render_target,
+                       unsigned *level,
+                       struct isl_surf tmp_surfs[2])
 {
    intel_miptree_get_isl_surf(brw, mt, &tmp_surfs[0]);
    surf->surf = &tmp_surfs[0];
-   surf->bo = mt->bo;
-   surf->offset = mt->offset;
+   surf->addr = (struct blorp_address) {
+      .buffer = mt->bo,
+      .offset = mt->offset,
+      .read_domains = is_render_target ? I915_GEM_DOMAIN_RENDER :
+                                         I915_GEM_DOMAIN_SAMPLER,
+      .write_domain = is_render_target ? I915_GEM_DOMAIN_RENDER : 0,
+   };
 
    if (brw->gen == 6 && mt->format == MESA_FORMAT_S_UINT8 &&
        mt->array_layout == ALL_SLICES_AT_EACH_LOD) {
@@ -95,7 +168,7 @@ brw_blorp_surf_for_miptree(struct brw_context *brw,
        */
       uint32_t offset;
       apply_gen6_stencil_hiz_offset(&tmp_surfs[0], mt, *level, &offset);
-      surf->offset += offset;
+      surf->addr.offset += offset;
       *level = 0;
    }
 
@@ -114,14 +187,20 @@ brw_blorp_surf_for_miptree(struct brw_context *brw,
       surf->clear_color = intel_miptree_get_isl_clear_color(brw, mt);
 
       surf->aux_surf = aux_surf;
+      surf->aux_addr = (struct blorp_address) {
+         .read_domains = is_render_target ? I915_GEM_DOMAIN_RENDER :
+                                            I915_GEM_DOMAIN_SAMPLER,
+         .write_domain = is_render_target ? I915_GEM_DOMAIN_RENDER : 0,
+      };
+
       if (mt->mcs_mt) {
-         surf->aux_bo = mt->mcs_mt->bo;
-         surf->aux_offset = mt->mcs_mt->offset;
+         surf->aux_addr.buffer = mt->mcs_mt->bo;
+         surf->aux_addr.offset = mt->mcs_mt->offset;
       } else {
          assert(surf->aux_usage == ISL_AUX_USAGE_HIZ);
          struct intel_mipmap_tree *hiz_mt = mt->hiz_buf->mt;
          if (hiz_mt) {
-            surf->aux_bo = hiz_mt->bo;
+            surf->aux_addr.buffer = hiz_mt->bo;
             if (brw->gen == 6 &&
                 hiz_mt->array_layout == ALL_SLICES_AT_EACH_LOD) {
                /* gen6 requires the HiZ buffer to be manually offset to the
@@ -129,22 +208,24 @@ brw_blorp_surf_for_miptree(struct brw_context *brw,
                 * matter since most of those fields don't matter.
                 */
                apply_gen6_stencil_hiz_offset(aux_surf, hiz_mt, *level,
-                                             &surf->aux_offset);
+                                             &surf->aux_addr.offset);
             } else {
-               surf->aux_offset = 0;
+               surf->aux_addr.offset = 0;
             }
             assert(hiz_mt->pitch == aux_surf->row_pitch);
          } else {
-            surf->aux_bo = mt->hiz_buf->bo;
-            surf->aux_offset = 0;
+            surf->aux_addr.buffer = mt->hiz_buf->bo;
+            surf->aux_addr.offset = 0;
          }
       }
    } else {
-      surf->aux_bo = NULL;
-      surf->aux_offset = 0;
+      surf->aux_addr = (struct blorp_address) {
+         .buffer = NULL,
+      };
       memset(&surf->clear_color, 0, sizeof(surf->clear_color));
    }
-   assert((surf->aux_usage == ISL_AUX_USAGE_NONE) == (surf->aux_bo == NULL));
+   assert((surf->aux_usage == ISL_AUX_USAGE_NONE) ==
+          (surf->aux_addr.buffer == NULL));
 }
 
 static enum isl_format
@@ -245,19 +326,22 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
    intel_miptree_used_for_rendering(dst_mt);
 
    struct isl_surf tmp_surfs[4];
-   struct brw_blorp_surf src_surf, dst_surf;
-   brw_blorp_surf_for_miptree(brw, &src_surf, src_mt, false,
-                              &src_level, &tmp_surfs[0]);
-   brw_blorp_surf_for_miptree(brw, &dst_surf, dst_mt, true,
-                              &dst_level, &tmp_surfs[2]);
+   struct blorp_surf src_surf, dst_surf;
+   blorp_surf_for_miptree(brw, &src_surf, src_mt, false,
+                          &src_level, &tmp_surfs[0]);
+   blorp_surf_for_miptree(brw, &dst_surf, dst_mt, true,
+                          &dst_level, &tmp_surfs[2]);
 
-   brw_blorp_blit(brw, &src_surf, src_level, src_layer,
-                  brw_blorp_to_isl_format(brw, src_format, false), src_swizzle,
-                  &dst_surf, dst_level, dst_layer,
-                  brw_blorp_to_isl_format(brw, dst_format, true),
-                  src_x0, src_y0, src_x1, src_y1,
-                  dst_x0, dst_y0, dst_x1, dst_y1,
-                  filter, mirror_x, mirror_y);
+   struct blorp_batch batch;
+   blorp_batch_init(&brw->blorp, &batch, brw);
+   blorp_blit(&batch, &src_surf, src_level, src_layer,
+              brw_blorp_to_isl_format(brw, src_format, false), src_swizzle,
+              &dst_surf, dst_level, dst_layer,
+              brw_blorp_to_isl_format(brw, dst_format, true),
+              src_x0, src_y0, src_x1, src_y1,
+              dst_x0, dst_y0, dst_x1, dst_y1,
+              filter, mirror_x, mirror_y);
+   blorp_batch_finish(&batch);
 
    intel_miptree_slice_set_needs_hiz_resolve(dst_mt, dst_level, dst_layer);
 
@@ -639,15 +723,20 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 
    /* We can't setup the blorp_surf until we've allocated the MCS above */
    struct isl_surf isl_tmp[2];
-   struct brw_blorp_surf surf;
+   struct blorp_surf surf;
    unsigned level = irb->mt_level;
-   brw_blorp_surf_for_miptree(brw, &surf, irb->mt, true, &level, isl_tmp);
+   blorp_surf_for_miptree(brw, &surf, irb->mt, true, &level, isl_tmp);
 
    if (can_fast_clear) {
       DBG("%s (fast) to mt %p level %d layer %d\n", __FUNCTION__,
           irb->mt, irb->mt_level, irb->mt_layer);
 
-      blorp_fast_clear(brw, &surf, level, layer, x0, y0, x1, y1);
+      struct blorp_batch batch;
+      blorp_batch_init(&brw->blorp, &batch, brw);
+      blorp_fast_clear(&batch, &surf, level, layer,
+                       (enum isl_format)brw->render_target_format[format],
+                       x0, y0, x1, y1);
+      blorp_batch_finish(&batch);
 
       /* Now that the fast clear has occurred, put the buffer in
        * INTEL_FAST_CLEAR_STATE_CLEAR so that we won't waste time doing
@@ -661,9 +750,12 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       union isl_color_value clear_color;
       memcpy(clear_color.f32, ctx->Color.ClearColor.f, sizeof(float) * 4);
 
-      blorp_clear(brw, &surf, level, layer, x0, y0, x1, y1,
+      struct blorp_batch batch;
+      blorp_batch_init(&brw->blorp, &batch, brw);
+      blorp_clear(&batch, &surf, level, layer, x0, y0, x1, y1,
                   (enum isl_format)brw->render_target_format[format],
                   clear_color, color_write_disable);
+      blorp_batch_finish(&batch);
 
       if (intel_miptree_is_lossless_compressed(brw, irb->mt)) {
          /* Compressed buffers can be cleared also using normal rep-clear. In
@@ -734,18 +826,22 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt)
    intel_miptree_used_for_rendering(mt);
 
    struct isl_surf isl_tmp[2];
-   struct brw_blorp_surf surf;
+   struct blorp_surf surf;
    unsigned level = 0;
-   brw_blorp_surf_for_miptree(brw, &surf, mt, true, &level, isl_tmp);
+   blorp_surf_for_miptree(brw, &surf, mt, true, &level, isl_tmp);
 
-   brw_blorp_ccs_resolve(brw, &surf, brw_blorp_to_isl_format(brw, format, true));
+   struct blorp_batch batch;
+   blorp_batch_init(&brw->blorp, &batch, brw);
+   blorp_ccs_resolve(&batch, &surf,
+                     brw_blorp_to_isl_format(brw, format, true));
+   blorp_batch_finish(&batch);
 
    mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
 }
 
 static void
 gen6_blorp_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-                    unsigned int level, unsigned int layer, enum gen6_hiz_op op)
+                    unsigned int level, unsigned int layer, enum blorp_hiz_op op)
 {
    intel_miptree_check_level_layer(mt, level, layer);
    intel_miptree_used_for_rendering(mt);
@@ -753,10 +849,13 @@ gen6_blorp_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
    assert(intel_miptree_level_has_hiz(mt, level));
 
    struct isl_surf isl_tmp[2];
-   struct brw_blorp_surf surf;
-   brw_blorp_surf_for_miptree(brw, &surf, mt, true, &level, isl_tmp);
+   struct blorp_surf surf;
+   blorp_surf_for_miptree(brw, &surf, mt, true, &level, isl_tmp);
 
-   blorp_gen6_hiz_op(brw, &surf, level, layer, op);
+   struct blorp_batch batch;
+   blorp_batch_init(&brw->blorp, &batch, brw);
+   blorp_gen6_hiz_op(&batch, &surf, level, layer, op);
+   blorp_batch_finish(&batch);
 }
 
 /**
@@ -770,21 +869,21 @@ gen6_blorp_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
  */
 void
 intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-	       unsigned int level, unsigned int layer, enum gen6_hiz_op op)
+	       unsigned int level, unsigned int layer, enum blorp_hiz_op op)
 {
    const char *opname = NULL;
 
    switch (op) {
-   case GEN6_HIZ_OP_DEPTH_RESOLVE:
+   case BLORP_HIZ_OP_DEPTH_RESOLVE:
       opname = "depth resolve";
       break;
-   case GEN6_HIZ_OP_HIZ_RESOLVE:
+   case BLORP_HIZ_OP_HIZ_RESOLVE:
       opname = "hiz ambiguate";
       break;
-   case GEN6_HIZ_OP_DEPTH_CLEAR:
+   case BLORP_HIZ_OP_DEPTH_CLEAR:
       opname = "depth clear";
       break;
-   case GEN6_HIZ_OP_NONE:
+   case BLORP_HIZ_OP_NONE:
       opname = "noop?";
       break;
    }

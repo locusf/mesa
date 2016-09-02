@@ -479,6 +479,8 @@ nvc0_screen_get_compute_param(struct pipe_screen *pscreen,
       RET((uint32_t []) { screen->mp_count_compute });
    case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
       RET((uint32_t []) { 512 }); /* FIXME: arbitrary limit */
+   case PIPE_COMPUTE_CAP_ADDRESS_BITS:
+      RET((uint32_t []) { 64 });
    default:
       return 0;
    }
@@ -671,7 +673,7 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    }
 }
 
-bool
+static int
 nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
                             uint32_t lpos, uint32_t lneg, uint32_t cstack)
 {
@@ -681,7 +683,7 @@ nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
 
    if (size >= (1 << 20)) {
       NOUVEAU_ERR("requested TLS size too large: 0x%"PRIx64"\n", size);
-      return false;
+      return -1;
    }
 
    size *= (screen->base.device->chipset >= 0xe0) ? 64 : 48; /* max warps */
@@ -692,13 +694,47 @@ nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
 
    ret = nouveau_bo_new(screen->base.device, NV_VRAM_DOMAIN(&screen->base), 1 << 17, size,
                         NULL, &bo);
-   if (ret) {
-      NOUVEAU_ERR("failed to allocate TLS area, size: 0x%"PRIx64"\n", size);
-      return false;
-   }
+   if (ret)
+      return ret;
    nouveau_bo_ref(NULL, &screen->tls);
    screen->tls = bo;
-   return true;
+   return 0;
+}
+
+int
+nvc0_screen_resize_text_area(struct nvc0_screen *screen, uint64_t size)
+{
+   struct nouveau_pushbuf *push = screen->base.pushbuf;
+   struct nouveau_bo *bo;
+   int ret;
+
+   ret = nouveau_bo_new(screen->base.device, NV_VRAM_DOMAIN(&screen->base),
+                        1 << 17, size, NULL, &bo);
+   if (ret)
+      return ret;
+
+   nouveau_bo_ref(NULL, &screen->text);
+   screen->text = bo;
+
+   nouveau_heap_destroy(&screen->lib_code);
+   nouveau_heap_destroy(&screen->text_heap);
+
+   /* XXX: getting a page fault at the end of the code buffer every few
+    *  launches, don't use the last 256 bytes to work around them - prefetch ?
+    */
+   nouveau_heap_init(&screen->text_heap, 0, size - 0x100);
+
+   /* update the code segment setup */
+   BEGIN_NVC0(push, NVC0_3D(CODE_ADDRESS_HIGH), 2);
+   PUSH_DATAh(push, screen->text->offset);
+   PUSH_DATA (push, screen->text->offset);
+   if (screen->compute) {
+      BEGIN_NVC0(push, NVC0_CP(CODE_ADDRESS_HIGH), 2);
+      PUSH_DATAh(push, screen->text->offset);
+      PUSH_DATA (push, screen->text->offset);
+   }
+
+   return 0;
 }
 
 #define FAIL_SCREEN_INIT(str, err)                    \
@@ -779,7 +815,7 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    ret = nouveau_bo_new(dev, flags, 0, 4096, NULL, &screen->fence.bo);
    if (ret)
-      goto fail;
+      FAIL_SCREEN_INIT("Error allocating fence BO: %d\n", ret);
    nouveau_bo_map(screen->fence.bo, 0, NULL);
    screen->fence.map = screen->fence.bo->map;
    screen->base.fence.emit = nvc0_screen_fence_emit;
@@ -911,7 +947,7 @@ nvc0_screen_create(struct nouveau_device *dev)
                     screen->base.drm->version >= 0x01000101);
    BEGIN_NVC0(push, NVC0_3D(RT_COMP_ENABLE(0)), 8);
    for (i = 0; i < 8; ++i)
-           PUSH_DATA(push, screen->base.drm->version >= 0x01000101);
+      PUSH_DATA(push, screen->base.drm->version >= 0x01000101);
 
    BEGIN_NVC0(push, NVC0_3D(RT_CONTROL), 1);
    PUSH_DATA (push, 1);
@@ -951,20 +987,14 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    nvc0_magic_3d_init(push, screen->eng3d->oclass);
 
-   ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 17, 1 << 20, NULL,
-                        &screen->text);
+   ret = nvc0_screen_resize_text_area(screen, 1 << 19);
    if (ret)
-      goto fail;
-
-   /* XXX: getting a page fault at the end of the code buffer every few
-    *  launches, don't use the last 256 bytes to work around them - prefetch ?
-    */
-   nouveau_heap_init(&screen->text_heap, 0, (1 << 20) - 0x100);
+      FAIL_SCREEN_INIT("Error allocating TEXT area: %d\n", ret);
 
    ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 12, 7 << 16, NULL,
                         &screen->uniform_bo);
    if (ret)
-      goto fail;
+      FAIL_SCREEN_INIT("Error allocating uniform BO: %d\n", ret);
 
    PUSH_REFN (push, screen->uniform_bo, NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_WR);
 
@@ -1028,10 +1058,8 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    if (screen->base.drm->version >= 0x01000101) {
       ret = nouveau_getparam(dev, NOUVEAU_GETPARAM_GRAPH_UNITS, &value);
-      if (ret) {
-         NOUVEAU_ERR("NOUVEAU_GETPARAM_GRAPH_UNITS failed.\n");
-         goto fail;
-      }
+      if (ret)
+         FAIL_SCREEN_INIT("NOUVEAU_GETPARAM_GRAPH_UNITS failed: %d\n", ret);
    } else {
       if (dev->chipset >= 0xe0 && dev->chipset < 0xf0)
          value = (8 << 8) | 4;
@@ -1042,11 +1070,10 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->mp_count = value >> 8;
    screen->mp_count_compute = screen->mp_count;
 
-   nvc0_screen_resize_tls_area(screen, 128 * 16, 0, 0x200);
+   ret = nvc0_screen_resize_tls_area(screen, 128 * 16, 0, 0x200);
+   if (ret)
+      FAIL_SCREEN_INIT("Error allocating TLS area: %d\n", ret);
 
-   BEGIN_NVC0(push, NVC0_3D(CODE_ADDRESS_HIGH), 2);
-   PUSH_DATAh(push, screen->text->offset);
-   PUSH_DATA (push, screen->text->offset);
    BEGIN_NVC0(push, NVC0_3D(TEMP_ADDRESS_HIGH), 4);
    PUSH_DATAh(push, screen->tls->offset);
    PUSH_DATA (push, screen->tls->offset);
@@ -1065,7 +1092,7 @@ nvc0_screen_create(struct nouveau_device *dev)
       ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 17, 1 << 20, NULL,
                            &screen->poly_cache);
       if (ret)
-         goto fail;
+         FAIL_SCREEN_INIT("Error allocating poly cache BO: %d\n", ret);
 
       BEGIN_NVC0(push, NVC0_3D(VERTEX_QUARANTINE_ADDRESS_HIGH), 3);
       PUSH_DATAh(push, screen->poly_cache->offset);
@@ -1076,7 +1103,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 17, 1 << 17, NULL,
                         &screen->txc);
    if (ret)
-      goto fail;
+      FAIL_SCREEN_INIT("Error allocating txc BO: %d\n", ret);
 
    BEGIN_NVC0(push, NVC0_3D(TIC_ADDRESS_HIGH), 3);
    PUSH_DATAh(push, screen->txc->offset);

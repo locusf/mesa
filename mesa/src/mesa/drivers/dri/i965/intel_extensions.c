@@ -354,6 +354,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;
       ctx->Extensions.EXT_shader_samples_identical = true;
+      ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
 
       if (brw->can_do_pipelined_register_writes) {
@@ -365,7 +366,8 @@ intelInitExtensions(struct gl_context *ctx)
          if ((brw->gen >= 8 || brw->intelScreen->cmd_parser_version >= 5) &&
              ctx->Const.MaxComputeWorkGroupSize[0] >= 1024) {
             ctx->Extensions.ARB_compute_shader = true;
-            ctx->Extensions.ARB_ES3_1_compatibility = brw->gen >= 8;
+            ctx->Extensions.ARB_ES3_1_compatibility =
+               brw->gen >= 8 || brw->is_haswell;
          }
 
          if (brw->intelScreen->cmd_parser_version >= 2)

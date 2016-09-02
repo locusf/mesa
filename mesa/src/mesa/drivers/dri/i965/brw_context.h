@@ -41,6 +41,7 @@
 #include "intel_aub.h"
 
 #include "isl/isl.h"
+#include "blorp/blorp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -893,6 +894,8 @@ struct brw_context
 
    struct isl_device isl_dev;
 
+   struct blorp_context blorp;
+
    GLuint NewGLState;
    struct {
       struct brw_state_flags pipelines[BRW_NUM_PIPELINES];
@@ -1692,6 +1695,9 @@ gen7_emit_push_constant_state(struct brw_context *brw, unsigned vs_size,
                               unsigned gs_size, unsigned fs_size);
 
 void
+gen6_upload_urb(struct brw_context *brw, unsigned vs_size,
+                bool gs_present, unsigned gs_size);
+void
 gen7_upload_urb(struct brw_context *brw, unsigned vs_size,
                 bool gs_present, bool tess_present);
 
@@ -1842,7 +1848,7 @@ gen8_emit_depth_stencil_hiz(struct brw_context *brw,
                             uint32_t tile_x, uint32_t tile_y);
 
 void gen8_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-                   unsigned int level, unsigned int layer, enum gen6_hiz_op op);
+                   unsigned int level, unsigned int layer, enum blorp_hiz_op op);
 
 uint32_t get_hw_prim_for_gl_prim(int mode);
 

@@ -402,7 +402,7 @@ struct pipe_surface *
 svga_validate_surface_view(struct svga_context *svga, struct svga_surface *s)
 {
    enum pipe_error ret = PIPE_OK;
-   unsigned shader;
+   enum pipe_shader_type shader;
    struct pipe_surface *surf = NULL;
 
    assert(svga_have_vgpu10(svga));
@@ -654,6 +654,32 @@ svga_propagate_surface(struct svga_context *svga, struct pipe_surface *surf)
    }
 
    SVGA_STATS_TIME_POP(ss->sws);
+}
+
+
+/**
+ * If any of the render targets are in backing texture views, propagate any
+ * changes to them back to the original texture.
+ */
+void
+svga_propagate_rendertargets(struct svga_context *svga)
+{
+   unsigned i;
+
+   /* Note that we examine the svga->state.hw_draw.framebuffer surfaces,
+    * not the svga->curr.framebuffer surfaces, because it's the former
+    * surfaces which may be backing surface views (the actual render targets).
+    */
+   for (i = 0; i < svga->state.hw_draw.num_rendertargets; i++) {
+      struct pipe_surface *s = svga->state.hw_draw.rtv[i];
+      if (s) {
+         svga_propagate_surface(svga, s);
+      }
+   }
+
+   if (svga->state.hw_draw.dsv) {
+      svga_propagate_surface(svga, svga->state.hw_draw.dsv);
+   }
 }
 
 

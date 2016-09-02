@@ -110,6 +110,8 @@ _mesa_varying_slot_in_fs(gl_varying_slot slot)
    case VARYING_SLOT_LAYER:
    case VARYING_SLOT_TESS_LEVEL_OUTER:
    case VARYING_SLOT_TESS_LEVEL_INNER:
+   case VARYING_SLOT_BOUNDING_BOX0:
+   case VARYING_SLOT_BOUNDING_BOX1:
       return GL_FALSE;
    default:
       return GL_TRUE;
@@ -1919,6 +1921,7 @@ struct gl_program
    GLbitfield64 InputsRead;     /**< Bitmask of which input regs are read */
    GLbitfield64 DoubleInputsRead;     /**< Bitmask of which input regs are read  and are doubles */
    GLbitfield64 OutputsWritten; /**< Bitmask of which output regs are written */
+   GLbitfield64 SecondaryOutputsWritten; /**< Subset of OutputsWritten outputs written with non-zero index. */
    GLbitfield64 OutputsRead; /**< Bitmask of which output regs are read */
    GLbitfield PatchInputsRead;  /**< VAR[0..31] usage for patch inputs (user-defined only) */
    GLbitfield PatchOutputsWritten; /**< VAR[0..31] usage for patch outputs (user-defined only) */
@@ -3788,6 +3791,9 @@ struct gl_constants
    bool LowerCsDerivedVariables;    /**< Lower gl_GlobalInvocationID and
                                      *   gl_LocalInvocationIndex based on
                                      *   other builtin variables. */
+
+   /** GL_OES_primitive_bounding_box */
+   bool NoPrimitiveBoundingBoxOutput;
 };
 
 
@@ -3940,6 +3946,7 @@ struct gl_extensions
    GLboolean EXT_vertex_array_bgra;
    GLboolean EXT_window_rectangles;
    GLboolean OES_copy_image;
+   GLboolean OES_primitive_bounding_box;
    GLboolean OES_sample_variables;
    GLboolean OES_standard_derivatives;
    GLboolean OES_texture_buffer;
@@ -4671,6 +4678,13 @@ struct gl_context
     * Once this field becomes true, it is never reset to false.
     */
    GLboolean ShareGroupReset;
+
+   /**
+    * \name OES_primitive_bounding_box
+    *
+    * Stores the arguments to glPrimitiveBoundingBox
+    */
+   GLfloat PrimitiveBoundingBox[8];
 };
 
 /**

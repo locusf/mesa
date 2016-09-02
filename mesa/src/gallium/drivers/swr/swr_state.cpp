@@ -235,7 +235,7 @@ swr_create_sampler_state(struct pipe_context *pipe,
 
 static void
 swr_bind_sampler_states(struct pipe_context *pipe,
-                        unsigned shader,
+                        enum pipe_shader_type shader,
                         unsigned start,
                         unsigned num,
                         void **samplers)
@@ -282,7 +282,7 @@ swr_create_sampler_view(struct pipe_context *pipe,
 
 static void
 swr_set_sampler_views(struct pipe_context *pipe,
-                      unsigned shader,
+                      enum pipe_shader_type shader,
                       unsigned start,
                       unsigned num,
                       struct pipe_sampler_view **views)

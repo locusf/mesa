@@ -46,6 +46,8 @@
 #include "common/simdintrin.h"
 #include "common/os.h"
 
+#include "archrast/archrast.h"
+
 static const SWR_RECT g_MaxScissorRect = { 0, 0, KNOB_MAX_SCISSOR_X, KNOB_MAX_SCISSOR_Y };
 
 void SetupDefaultState(SWR_CONTEXT *pContext);
@@ -77,6 +79,15 @@ HANDLE SwrCreateContext(
     pContext->pMacroTileManagerArray = (MacroTileMgr*)AlignedMalloc(sizeof(MacroTileMgr) * KNOB_MAX_DRAWS_IN_FLIGHT, 64);
     pContext->pDispatchQueueArray = (DispatchQueue*)AlignedMalloc(sizeof(DispatchQueue) * KNOB_MAX_DRAWS_IN_FLIGHT, 64);
 
+    for (uint32_t dc = 0; dc < KNOB_MAX_DRAWS_IN_FLIGHT; ++dc)
+    {
+        pContext->dcRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
+        new (&pContext->pMacroTileManagerArray[dc]) MacroTileMgr(*pContext->dcRing[dc].pArena);
+        new (&pContext->pDispatchQueueArray[dc]) DispatchQueue();
+
+        pContext->dsRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
+    }
+
     pContext->threadInfo.MAX_WORKER_THREADS        = KNOB_MAX_WORKER_THREADS;
     pContext->threadInfo.MAX_NUMA_NODES            = KNOB_MAX_NUMA_NODES;
     pContext->threadInfo.MAX_CORES_PER_NUMA_NODE   = KNOB_MAX_CORES_PER_NUMA_NODE;
@@ -88,32 +99,19 @@ HANDLE SwrCreateContext(
         pContext->threadInfo = *pCreateInfo->pThreadInfo;
     }
 
-    for (uint32_t dc = 0; dc < KNOB_MAX_DRAWS_IN_FLIGHT; ++dc)
-    {
-        pContext->dcRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
-        new (&pContext->pMacroTileManagerArray[dc]) MacroTileMgr(*pContext->dcRing[dc].pArena);
-        new (&pContext->pDispatchQueueArray[dc]) DispatchQueue();
+    memset(&pContext->WaitLock, 0, sizeof(pContext->WaitLock));
+    memset(&pContext->FifosNotEmpty, 0, sizeof(pContext->FifosNotEmpty));
+    new (&pContext->WaitLock) std::mutex();
+    new (&pContext->FifosNotEmpty) std::condition_variable();
 
-        pContext->dsRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
-    }
+    CreateThreadPool(pContext, &pContext->threadPool);
 
-    if (!pContext->threadInfo.SINGLE_THREADED)
-    {
-        memset(&pContext->WaitLock, 0, sizeof(pContext->WaitLock));
-        memset(&pContext->FifosNotEmpty, 0, sizeof(pContext->FifosNotEmpty));
-        new (&pContext->WaitLock) std::mutex();
-        new (&pContext->FifosNotEmpty) std::condition_variable();
+    pContext->ppScratch = new uint8_t*[pContext->NumWorkerThreads];
+    pContext->pStats = new SWR_STATS[pContext->NumWorkerThreads];
 
-        CreateThreadPool(pContext, &pContext->threadPool);
-    }
-
-    // Calling createThreadPool() above can set SINGLE_THREADED
-    if (pContext->threadInfo.SINGLE_THREADED)
-    {
-        pContext->NumWorkerThreads = 1;
-        pContext->NumFEThreads = 1;
-        pContext->NumBEThreads = 1;
-    }
+    // Setup ArchRast thread contexts which includes +1 for API thread.
+    pContext->pArContext = new HANDLE[pContext->NumWorkerThreads+1];
+    pContext->pArContext[pContext->NumWorkerThreads] = ArchRast::CreateThreadContext();
 
     // Allocate scratch space for workers.
     ///@note We could lazily allocate this but its rather small amount of memory.
@@ -122,13 +120,16 @@ HANDLE SwrCreateContext(
 #if defined(_WIN32)
         uint32_t numaNode = pContext->threadPool.pThreadData ?
             pContext->threadPool.pThreadData[i].numaId : 0;
-        pContext->pScratch[i] = (uint8_t*)VirtualAllocExNuma(
+        pContext->ppScratch[i] = (uint8_t*)VirtualAllocExNuma(
             GetCurrentProcess(), nullptr, 32 * sizeof(KILOBYTE),
             MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE,
             numaNode);
 #else
-        pContext->pScratch[i] = (uint8_t*)AlignedMalloc(32 * sizeof(KILOBYTE), KNOB_SIMD_WIDTH * 4);
+        pContext->ppScratch[i] = (uint8_t*)AlignedMalloc(32 * sizeof(KILOBYTE), KNOB_SIMD_WIDTH * 4);
 #endif
+
+        // Initialize worker thread context for ArchRast.
+        pContext->pArContext[i] = ArchRast::CreateThreadContext();
     }
 
     // State setup AFTER context is fully initialized
@@ -166,6 +167,7 @@ void SwrDestroyContext(HANDLE hContext)
     // free the fifos
     for (uint32_t i = 0; i < KNOB_MAX_DRAWS_IN_FLIGHT; ++i)
     {
+        delete [] pContext->dcRing[i].dynState.pStats;
         delete pContext->dcRing[i].pArena;
         delete pContext->dsRing[i].pArena;
         pContext->pMacroTileManagerArray[i].~MacroTileMgr();
@@ -179,11 +181,17 @@ void SwrDestroyContext(HANDLE hContext)
     for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
     {
 #if defined(_WIN32)
-        VirtualFree(pContext->pScratch[i], 0, MEM_RELEASE);
+        VirtualFree(pContext->ppScratch[i], 0, MEM_RELEASE);
 #else
-        AlignedFree(pContext->pScratch[i]);
+        AlignedFree(pContext->ppScratch[i]);
 #endif
+
+        ArchRast::DestroyThreadContext(pContext->pArContext[i]);
     }
+
+    delete [] pContext->ppScratch;
+    delete [] pContext->pArContext;
+    delete [] pContext->pStats;
 
     delete(pContext->pHotTileMgr);
 
@@ -352,7 +360,7 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
         pCurDrawContext->threadsDone = 0;
         pCurDrawContext->retireCallback.pfnCallbackFunc = nullptr;
 
-        memset(&pCurDrawContext->dynState, 0, sizeof(pCurDrawContext->dynState));
+        pCurDrawContext->dynState.Reset(pContext->NumWorkerThreads);
 
         // Assign unique drawId for this DC
         pCurDrawContext->drawId = pContext->dcRing.GetHead();
@@ -639,13 +647,18 @@ void SwrSetBlendFunc(
 }
 
 // update guardband multipliers for the viewport
-void updateGuardband(API_STATE *pState)
+void updateGuardbands(API_STATE *pState)
 {
-    // guardband center is viewport center
-    pState->gbState.left    = KNOB_GUARDBAND_WIDTH  / pState->vp[0].width;
-    pState->gbState.right   = KNOB_GUARDBAND_WIDTH  / pState->vp[0].width;
-    pState->gbState.top     = KNOB_GUARDBAND_HEIGHT / pState->vp[0].height;
-    pState->gbState.bottom  = KNOB_GUARDBAND_HEIGHT / pState->vp[0].height;
+    uint32_t numGbs = pState->gsState.emitsRenderTargetArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
+
+    for(uint32_t i = 0; i < numGbs; ++i)
+    {
+        // guardband center is viewport center
+        pState->gbState.left[i] = KNOB_GUARDBAND_WIDTH / pState->vp[i].width;
+        pState->gbState.right[i] = KNOB_GUARDBAND_WIDTH / pState->vp[i].width;
+        pState->gbState.top[i] = KNOB_GUARDBAND_HEIGHT / pState->vp[i].height;
+        pState->gbState.bottom[i] = KNOB_GUARDBAND_HEIGHT / pState->vp[i].height;
+    }
 }
 
 void SwrSetRastState(
@@ -709,7 +722,7 @@ void SwrSetViewports(
         }
     }
 
-    updateGuardband(pState);
+    updateGuardbands(pState);
 }
 
 void SwrSetScissorRects(
@@ -727,34 +740,50 @@ void SwrSetScissorRects(
 void SetupMacroTileScissors(DRAW_CONTEXT *pDC)
 {
     API_STATE *pState = &pDC->pState->state;
+    uint32_t numScissors = pState->gsState.emitsViewportArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
+    pState->scissorsTileAligned = true;
 
-    // Set up scissor dimensions based on scissor or viewport
-    if (pState->rastState.scissorEnable)
+    for (uint32_t index = 0; index < numScissors; ++index)
     {
-        pState->scissorInFixedPoint = pState->scissorRects[0];
+        SWR_RECT &scissorInFixedPoint = pState->scissorsInFixedPoint[index];
+
+        // Set up scissor dimensions based on scissor or viewport
+        if (pState->rastState.scissorEnable)
+        {
+            scissorInFixedPoint = pState->scissorRects[index];
+        }
+        else
+        {
+            // the vp width and height must be added to origin un-rounded then the result round to -inf.
+            // The cast to int works for rounding assuming all [left, right, top, bottom] are positive.
+            scissorInFixedPoint.xmin = (int32_t)pState->vp[index].x;
+            scissorInFixedPoint.xmax = (int32_t)(pState->vp[index].x + pState->vp[index].width);
+            scissorInFixedPoint.ymin = (int32_t)pState->vp[index].y;
+            scissorInFixedPoint.ymax = (int32_t)(pState->vp[index].y + pState->vp[index].height);
+        }
+
+        // Clamp to max rect
+        scissorInFixedPoint &= g_MaxScissorRect;
+
+        // Test for tile alignment
+        bool tileAligned;
+        tileAligned  = (scissorInFixedPoint.xmin % KNOB_TILE_X_DIM) == 0;
+        tileAligned &= (scissorInFixedPoint.ymin % KNOB_TILE_Y_DIM) == 0;
+        tileAligned &= (scissorInFixedPoint.xmax % KNOB_TILE_X_DIM) == 0;
+        tileAligned &= (scissorInFixedPoint.xmax % KNOB_TILE_Y_DIM) == 0;
+
+        pState->scissorsTileAligned &= tileAligned;
+
+        // Scale to fixed point
+        scissorInFixedPoint.xmin *= FIXED_POINT_SCALE;
+        scissorInFixedPoint.xmax *= FIXED_POINT_SCALE;
+        scissorInFixedPoint.ymin *= FIXED_POINT_SCALE;
+        scissorInFixedPoint.ymax *= FIXED_POINT_SCALE;
+
+        // Make scissor inclusive
+        scissorInFixedPoint.xmax -= 1;
+        scissorInFixedPoint.ymax -= 1;
     }
-    else
-    {
-        // the vp width and height must be added to origin un-rounded then the result round to -inf.
-        // The cast to int works for rounding assuming all [left, right, top, bottom] are positive.
-        pState->scissorInFixedPoint.xmin = (int32_t)pState->vp[0].x;
-        pState->scissorInFixedPoint.xmax = (int32_t)(pState->vp[0].x + pState->vp[0].width);
-        pState->scissorInFixedPoint.ymin = (int32_t)pState->vp[0].y;
-        pState->scissorInFixedPoint.ymax = (int32_t)(pState->vp[0].y + pState->vp[0].height);
-    }
-
-    // Clamp to max rect
-    pState->scissorInFixedPoint &= g_MaxScissorRect;
-
-    // Scale to fixed point
-    pState->scissorInFixedPoint.xmin *= FIXED_POINT_SCALE;
-    pState->scissorInFixedPoint.xmax *= FIXED_POINT_SCALE;
-    pState->scissorInFixedPoint.ymin *= FIXED_POINT_SCALE;
-    pState->scissorInFixedPoint.ymax *= FIXED_POINT_SCALE;
-
-    // Make scissor inclusive
-    pState->scissorInFixedPoint.xmax -= 1;
-    pState->scissorInFixedPoint.ymax -= 1;
 }
 
 // templated backend function tables
@@ -780,7 +809,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
         const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || rastState.forcedSampleCount) ? 1 : 0;
         const uint32_t centroid = ((psState.barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0) ? 1 : 0;
         const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesSourceDepth && !psState.usesUAV)) ? 1 : 0;
-     
+
         SWR_BARYCENTRICS_MASK barycentricsMask = (SWR_BARYCENTRICS_MASK)psState.barycentricsMask;
         
         // select backend function
@@ -1177,6 +1206,9 @@ void DrawIndexedInstance(
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
     API_STATE* pState = &pDC->pState->state;
 
+    AR_BEGIN(AR_API_CTX, APIDrawIndexed, pDC->drawId);
+    AR_EVENT(AR_API_CTX, DrawIndexedInstance(topology, numIndices, indexOffset, baseVertex, numInstances, startInstance));
+
     uint32_t maxIndicesPerDraw = MaxVertsPerDraw(pDC, numIndices, topology);
     uint32_t primsPerDraw = GetNumPrims(topology, maxIndicesPerDraw);
     uint32_t remainingIndices = numIndices;
@@ -1248,6 +1280,7 @@ void DrawIndexedInstance(
     pDC = GetDrawContext(pContext);
     pDC->pState->state.rastState.cullMode = oldCullMode;
 
+    AR_END(AR_API_CTX, APIDrawIndexed, numIndices * numInstances);
     RDTSC_STOP(APIDrawIndexed, numIndices * numInstances, 0);
 }
 

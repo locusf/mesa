@@ -229,6 +229,8 @@ struct pipe_context *svga_context_create(struct pipe_screen *screen,
    memset(svga->state.hw_draw.sampler_views, 0,
           sizeof(svga->state.hw_draw.sampler_views));
    svga->state.hw_draw.num_views = 0;
+   svga->state.hw_draw.num_rendertargets = 0;
+   svga->state.hw_draw.dsv = NULL;
 
    /* Initialize the shader pointers */
    svga->state.hw_draw.vs = NULL;
@@ -408,24 +410,15 @@ void svga_hwtnl_flush_buffer( struct svga_context *svga,
  */ 
 void svga_surfaces_flush(struct svga_context *svga)
 {
-   struct svga_screen *svgascreen = svga_screen(svga->pipe.screen);
-   unsigned i;
-
    SVGA_STATS_TIME_PUSH(svga_sws(svga), SVGA_STATS_TIME_SURFACEFLUSH);
 
    /* Emit buffered drawing commands.
     */
    svga_hwtnl_flush_retry( svga );
 
-   /* Emit back-copy from render target view to texture.
+   /* Emit back-copy from render target views to textures.
     */
-   for (i = 0; i < svgascreen->max_color_buffers; i++) {
-      if (svga->curr.framebuffer.cbufs[i])
-         svga_propagate_surface(svga, svga->curr.framebuffer.cbufs[i]);
-   }
-
-   if (svga->curr.framebuffer.zsbuf)
-      svga_propagate_surface(svga, svga->curr.framebuffer.zsbuf);
+   svga_propagate_rendertargets(svga);
 
    SVGA_STATS_TIME_POP(svga_sws(svga));
 }

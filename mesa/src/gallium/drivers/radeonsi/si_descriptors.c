@@ -465,7 +465,7 @@ static bool is_compressed_colortex(struct r600_texture *rtex)
 }
 
 static void si_set_sampler_views(struct pipe_context *ctx,
-				 unsigned shader, unsigned start,
+				 enum pipe_shader_type shader, unsigned start,
                                  unsigned count,
 				 struct pipe_sampler_view **views)
 {
@@ -704,7 +704,8 @@ static void si_set_shader_image(struct si_context *ctx,
 }
 
 static void
-si_set_shader_images(struct pipe_context *pipe, unsigned shader,
+si_set_shader_images(struct pipe_context *pipe,
+		     enum pipe_shader_type shader,
 		     unsigned start_slot, unsigned count,
 		     const struct pipe_image_view *views)
 {
@@ -750,7 +751,8 @@ si_images_update_compressed_colortex_mask(struct si_images_info *images)
 
 /* SAMPLER STATES */
 
-static void si_bind_sampler_states(struct pipe_context *ctx, unsigned shader,
+static void si_bind_sampler_states(struct pipe_context *ctx,
+                                   enum pipe_shader_type shader,
                                    unsigned start, unsigned count, void **states)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -1059,19 +1061,21 @@ static void si_pipe_set_constant_buffer(struct pipe_context *ctx,
 /* SHADER BUFFERS */
 
 static unsigned
-si_shader_buffer_descriptors_idx(unsigned shader)
+si_shader_buffer_descriptors_idx(enum pipe_shader_type shader)
 {
 	return SI_DESCS_FIRST_SHADER + shader * SI_NUM_SHADER_DESCS +
 	       SI_SHADER_DESCS_SHADER_BUFFERS;
 }
 
 static struct si_descriptors *
-si_shader_buffer_descriptors(struct si_context *sctx, unsigned shader)
+si_shader_buffer_descriptors(struct si_context *sctx,
+				  enum pipe_shader_type shader)
 {
 	return &sctx->descriptors[si_shader_buffer_descriptors_idx(shader)];
 }
 
-static void si_set_shader_buffers(struct pipe_context *ctx, unsigned shader,
+static void si_set_shader_buffers(struct pipe_context *ctx,
+				  enum pipe_shader_type shader,
 				  unsigned start_slot, unsigned count,
 				  const struct pipe_shader_buffer *sbuffers)
 {

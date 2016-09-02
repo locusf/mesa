@@ -631,6 +631,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(OES_geometry_point_size),
    EXT(OES_geometry_shader),
    EXT(OES_gpu_shader5),
+   EXT(OES_primitive_bounding_box),
    EXT(OES_sample_variables),
    EXT(OES_shader_image_atomic),
    EXT(OES_shader_io_blocks),
@@ -656,6 +657,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(EXT_geometry_point_size),
    EXT(EXT_geometry_shader),
    EXT(EXT_gpu_shader5),
+   EXT(EXT_primitive_bounding_box),
    EXT(EXT_separate_shader_objects),
    EXT(EXT_shader_framebuffer_fetch),
    EXT(EXT_shader_integer_mix),
@@ -957,6 +959,7 @@ _mesa_ast_process_interface_block(YYLTYPE *locp,
    temp_type_qualifier.flags.q.in = true;
    temp_type_qualifier.flags.q.out = true;
    temp_type_qualifier.flags.q.buffer = true;
+   temp_type_qualifier.flags.q.patch = true;
    interface_type_mask = temp_type_qualifier.flags.i;
 
    /* Get the block's interface qualifier.  The interface_qualifier

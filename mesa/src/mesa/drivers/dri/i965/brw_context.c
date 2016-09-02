@@ -51,6 +51,7 @@
 
 #include "brw_context.h"
 #include "brw_defines.h"
+#include "brw_blorp.h"
 #include "brw_compiler.h"
 #include "brw_draw.h"
 #include "brw_state.h"
@@ -771,6 +772,9 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxFramebufferHeight = 16384;
    ctx->Const.MaxFramebufferLayers = ctx->Const.MaxArrayTextureLayers;
    ctx->Const.MaxFramebufferSamples = max_samples;
+
+   /* OES_primitive_bounding_box */
+   ctx->Const.NoPrimitiveBoundingBoxOutput = true;
 }
 
 static void
@@ -1048,6 +1052,9 @@ brwCreateContext(gl_api api,
 
    brw_init_surface_formats(brw);
 
+   if (brw->gen >= 6)
+      brw_blorp_init(brw);
+
    brw->max_vs_threads = devinfo->max_vs_threads;
    brw->max_hs_threads = devinfo->max_hs_threads;
    brw->max_ds_threads = devinfo->max_ds_threads;
@@ -1129,6 +1136,9 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       brw_collect_and_report_shader_time(brw);
       brw_destroy_shader_time(brw);
    }
+
+   if (brw->gen >= 6)
+      blorp_finish(&brw->blorp);
 
    brw_destroy_state(brw);
    brw_draw_destroy(brw);

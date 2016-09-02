@@ -95,11 +95,6 @@ i965_compiler_GENERATED_FILES = \
 	brw_nir_trig_workarounds.c
 
 i965_FILES = \
-	blorp.c \
-	blorp.h \
-	blorp_blit.c \
-	blorp_clear.c \
-	blorp_priv.h \
 	brw_binding_tables.c \
 	brw_blorp.c \
 	brw_blorp.h \

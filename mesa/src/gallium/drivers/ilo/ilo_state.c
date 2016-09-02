@@ -1052,7 +1052,8 @@ ilo_create_sampler_state(struct pipe_context *pipe,
 }
 
 static void
-ilo_bind_sampler_states(struct pipe_context *pipe, unsigned shader,
+ilo_bind_sampler_states(struct pipe_context *pipe,
+                        enum pipe_shader_type shader,
                         unsigned start, unsigned count, void **samplers)
 {
    struct ilo_state_vector *vec = &ilo_context(pipe)->state_vector;
@@ -1801,7 +1802,7 @@ ilo_set_viewport_states(struct pipe_context *pipe,
 }
 
 static void
-ilo_set_sampler_views(struct pipe_context *pipe, unsigned shader,
+ilo_set_sampler_views(struct pipe_context *pipe, enum pipe_shader_type shader,
                       unsigned start, unsigned count,
                       struct pipe_sampler_view **views)
 {
@@ -1845,11 +1846,14 @@ ilo_set_sampler_views(struct pipe_context *pipe, unsigned shader,
    case PIPE_SHADER_COMPUTE:
       vec->dirty |= ILO_DIRTY_VIEW_CS;
       break;
+   default:
+      assert(!"unexpected shader type");
+      break;
    }
 }
 
 static void
-ilo_set_shader_images(struct pipe_context *pipe, unsigned shader,
+ilo_set_shader_images(struct pipe_context *pipe, enum pipe_shader_type shader,
                       unsigned start, unsigned count,
                       const struct pipe_image_view *views)
 {

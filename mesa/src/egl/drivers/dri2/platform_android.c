@@ -753,7 +753,7 @@ static EGLBoolean
 droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
-   const struct {
+   static const struct {
       int format;
       unsigned int rgba_masks[4];
    } visuals[] = {
@@ -804,15 +804,6 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
          _eglLog(_EGL_DEBUG, "No DRI config supports native format 0x%x",
                visuals[i].format);
       }
-   }
-
-   /* post-process configs */
-   for (i = 0; i < dpy->Configs->Size; i++) {
-      struct dri2_egl_config *dri2_conf = dri2_egl_config(dpy->Configs->Elements[i]);
-
-      /* there is no front buffer so no OpenGL */
-      dri2_conf->base.RenderableType &= ~EGL_OPENGL_BIT;
-      dri2_conf->base.Conformant &= ~EGL_OPENGL_BIT;
    }
 
    return (count != 0);

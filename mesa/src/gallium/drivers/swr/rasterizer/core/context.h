@@ -63,6 +63,7 @@ struct TRI_FLAGS
     float pointSize;
     uint32_t primID;
     uint32_t renderTargetArrayIndex;
+    uint32_t viewportIndex;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -208,9 +209,12 @@ struct FE_WORK
     } desc;
 };
 
-struct GUARDBAND
+struct GUARDBANDS
 {
-    float left, right, top, bottom;
+    float left[KNOB_NUM_VIEWPORTS_SCISSORS];
+    float right[KNOB_NUM_VIEWPORTS_SCISSORS];
+    float top[KNOB_NUM_VIEWPORTS_SCISSORS];
+    float bottom[KNOB_NUM_VIEWPORTS_SCISSORS];
 };
 
 struct PA_STATE;
@@ -268,13 +272,14 @@ OSALIGNLINE(struct) API_STATE
     // floating point multisample offsets
     float samplePos[SWR_MAX_NUM_MULTISAMPLES * 2];
 
-    GUARDBAND               gbState;
+    GUARDBANDS               gbState;
 
     SWR_VIEWPORT            vp[KNOB_NUM_VIEWPORTS_SCISSORS];
     SWR_VIEWPORT_MATRICES   vpMatrices;
 
     SWR_RECT                scissorRects[KNOB_NUM_VIEWPORTS_SCISSORS];
-    SWR_RECT                scissorInFixedPoint;
+    SWR_RECT                scissorsInFixedPoint[KNOB_NUM_VIEWPORTS_SCISSORS];
+    bool                    scissorsTileAligned;
 
     // Backend state
     SWR_BACKEND_STATE       backendState;
@@ -363,12 +368,19 @@ struct DRAW_STATE
 
 struct DRAW_DYNAMIC_STATE
 {
+    void Reset(uint32_t numThreads)
+    {
+        SWR_STATS* pSavePtr = pStats;
+        memset(this, 0, sizeof(*this));
+        pStats = pSavePtr;
+        memset(pStats, 0, sizeof(SWR_STATS) * numThreads);
+    }
     ///@todo Currently assumes only a single FE can do stream output for a draw.
     uint32_t SoWriteOffset[4];
     bool     SoWriteOffsetDirty[4];
 
     SWR_STATS_FE statsFE;   // Only one FE thread per DC.
-    SWR_STATS    stats[KNOB_MAX_NUM_THREADS];
+    SWR_STATS*   pStats;
 };
 
 // Draw Context
@@ -481,10 +493,10 @@ struct SWR_CONTEXT
     PFN_UPDATE_STATS_FE         pfnUpdateStatsFE;
 
     // Global Stats
-    SWR_STATS stats[KNOB_MAX_NUM_THREADS];
+    SWR_STATS* pStats;
 
     // Scratch space for workers.
-    uint8_t* pScratch[KNOB_MAX_NUM_THREADS];
+    uint8_t** ppScratch;
 
     volatile int32_t  drawsOutstandingFE;
 
@@ -494,7 +506,24 @@ struct SWR_CONTEXT
     uint32_t lastFrameChecked;
     uint64_t lastDrawChecked;
     TileSet singleThreadLockedTiles;
+
+    // ArchRast thread contexts.
+    HANDLE* pArContext;
 };
 
-#define UPDATE_STAT(name, count) if (GetApiState(pDC).enableStats) { pDC->dynState.stats[workerId].name += count; }
+#define UPDATE_STAT(name, count) if (GetApiState(pDC).enableStats) { pDC->dynState.pStats[workerId].name += count; }
 #define UPDATE_STAT_FE(name, count) if (GetApiState(pDC).enableStats) { pDC->dynState.statsFE.name += count; }
+
+// ArchRast instrumentation framework
+#ifdef KNOB_ENABLE_AR
+#define AR_WORKER_CTX  pDC->pContext->pArContext[workerId]
+#define AR_API_CTX     pDC->pContext->pArContext[pContext->NumWorkerThreads]
+
+#define AR_BEGIN(ctx, type, id)    ArchRast::dispatch(ctx, ArchRast::Start(ArchRast::type, id))
+#define AR_END(ctx, type, count)   ArchRast::dispatch(ctx, ArchRast::End(ArchRast::type, count))
+#define AR_EVENT(ctx, event)       ArchRast::dispatch(ctx, ArchRast::event)
+#else
+#define AR_BEGIN(ctx, type, id)
+#define AR_END(ctx, type, id)
+#define AR_EVENT(ctx, event)
+#endif

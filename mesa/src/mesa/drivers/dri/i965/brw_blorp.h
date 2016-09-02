@@ -23,13 +23,15 @@
 
 #pragma once
 
-#include "blorp.h"
+#include "blorp/blorp.h"
 #include "intel_mipmap_tree.h"
 #include "program/prog_instruction.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void brw_blorp_init(struct brw_context *brw);
 
 void
 brw_blorp_blit_miptrees(struct brw_context *brw,
@@ -56,7 +58,18 @@ brw_blorp_resolve_color(struct brw_context *brw,
 
 void
 intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-	       unsigned int level, unsigned int layer, enum gen6_hiz_op op);
+	       unsigned int level, unsigned int layer, enum blorp_hiz_op op);
+
+void gen6_blorp_exec(struct blorp_batch *batch,
+                     const struct blorp_params *params);
+void gen7_blorp_exec(struct blorp_batch *batch,
+                     const struct blorp_params *params);
+void gen75_blorp_exec(struct blorp_batch *batch,
+                      const struct blorp_params *params);
+void gen8_blorp_exec(struct blorp_batch *batch,
+                     const struct blorp_params *params);
+void gen9_blorp_exec(struct blorp_batch *batch,
+                     const struct blorp_params *params);
 
 #ifdef __cplusplus
 } /* extern "C" */
